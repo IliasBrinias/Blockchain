@@ -15,7 +15,6 @@ contract Shop is IERC20 {
     address[3] public admins;              // customers EOA
     uint256 public balance;                // balance
     uint256 public pendingBalance;         // balance from Pending Transactions
-    mapping(uint=>Product) public products;// products
     Transaction[] public acceptedTransactions;
     Transaction[] public declinedTransactions;
     Transaction[] public clientDeclinedTransactions;
@@ -38,9 +37,7 @@ contract Shop is IERC20 {
     mapping(address => uint256) adminIdx;
     mapping(address => Transaction) transactionMap;
     AdminAccountChange public adminAccountChange;
-
-
-    WithdrawRequest withdrawRequest;
+    WithdrawRequest public withdrawRequest;
     uint256 withdrawId = 0;
 
     // structs
@@ -54,11 +51,7 @@ contract Shop is IERC20 {
         bool exists;
         address[] answeredAdmins;
     }
-    struct Product{
-        string name;
-        uint id;
-        uint amount;
-    }
+
     struct AdminAccountChange{
         address currentAccount;
         address newAccount;
@@ -67,6 +60,7 @@ contract Shop is IERC20 {
         address[] answeredAdmins;
         bool exists;
     }
+
     struct WithdrawRequest{
         bool exists;
         uint256 id;
@@ -77,6 +71,7 @@ contract Shop is IERC20 {
         uint256 amount;
         string state;
     }
+
     constructor() {
         // initialize the owner and 3 admins
         owner = msg.sender;
@@ -92,15 +87,10 @@ contract Shop is IERC20 {
         adminExists[admins[2]] = true;
         adminIdx[admins[2]] = 2;
 
-        //initialize the products
-        products[0] = Product("Pencil",0,500);
-        products[1] = Product("Book",1,10000);
-        products[2] = Product("Desk",2,100000);
-
         // On creation of the contract all the tokens go to the owner
         balances[msg.sender] = totalSupply_;
     }
-
+    // ----
     // Withdraws
     modifier withdrawCheck(){
         // check if he is admin
@@ -109,7 +99,7 @@ contract Shop is IERC20 {
         require(withdrawRequest.exists, "You dont have any pending withdraw");
 
         // check if the admin is aswered allready
-        address[] storage answered = withdrawRequest.answeredAdmins;
+        address[] memory answered = withdrawRequest.answeredAdmins;
         for(uint i=0; i<answered.length;i++){
             require(answered[i] != msg.sender, "You have aswered allready this Withdraw");
         }
@@ -119,17 +109,33 @@ contract Shop is IERC20 {
         require(tokenAmount <= balance, "The contract does not have the number of tokens you want to withdraw.");
 
         withdrawId += 1;
-        address[] memory emptyAddressArray;
-        withdrawRequest = WithdrawRequest(
+        if(adminExists[msg.sender]){
+            // if the adming wants to withdraw create request with accept = 1
+            address[] memory emptyAddressArray = new address[](1);
+            emptyAddressArray[0] = msg.sender;
+            withdrawRequest = WithdrawRequest(
                 true,
                 withdrawId,
                 msg.sender,
-                0,
+                1,
                 0,
                 emptyAddressArray,
                 tokenAmount,
                 PENDING_REQ
             );
+        }else{
+            address[] memory emptyAddressArray;
+            withdrawRequest = WithdrawRequest(
+                    true,
+                    withdrawId,
+                    msg.sender,
+                    0,
+                    0,
+                    emptyAddressArray,
+                    tokenAmount,
+                    PENDING_REQ
+                );
+        }
         return withdrawId;
     }
     function acceptWithdraw() public withdrawCheck returns(string memory){
@@ -141,7 +147,13 @@ contract Shop is IERC20 {
             // make the Withdraw accepted
             withdrawRequest.state = ACCEPT_REQ;
             withdrawAccepted.push(withdrawRequest);
-            balances[withdrawRequest.to] += withdrawRequest.amount*ethereumExchangeRate;
+            // move tokents to
+
+            // Transfer the amount
+            uint etherAmount = uint(withdrawRequest.amount)/uint(ethereumExchangeRate);
+            payable(withdrawRequest.to).transfer(etherAmount);
+
+            balance -= withdrawRequest.amount;
             delete withdrawRequest;
             return "The Withdraw was accepted";
         }
@@ -166,7 +178,7 @@ contract Shop is IERC20 {
         }
         return "The Withdraw still Pending";
     }
-
+    // ----
     // return all the Pending Transactios
     function showPendingTransactions() public view returns(Transaction[] memory){
         Transaction[] memory t = new Transaction[](pendingTransaction.length);
@@ -175,21 +187,17 @@ contract Shop is IERC20 {
         }
         return (t);
     }
-    // -- -- --
     // Transaction create accept decline
-    function createTransaction(uint idProduct) public {
-        // check if the product exists
-        require(keccak256(bytes(products[idProduct].name)) != keccak256(bytes("")),"Product not found");
-
+    function createTransaction(uint idProduct, uint amountToken) public {
+        require(balances[msg.sender]>=amountToken, "You don't have enough tokens for this Transaction");
         // check if the amount is bigger than the product amount
-        require(balances[msg.sender] >= products[idProduct].amount, "Your current ballance is smaller from the price of the product");
 
         // check if the transaction exists
         require(!transactionMap[msg.sender].exists, "You have allready a pending transaction, decline the old one first");
 
         // save the transaction as pending
-        pendingBalance += products[idProduct].amount;
-        balances[msg.sender] -= products[idProduct].amount;
+        pendingBalance += amountToken;
+        balances[msg.sender] -= amountToken;
 
         // save the Transaction
         pendingTransaction.push(msg.sender);
@@ -197,16 +205,15 @@ contract Shop is IERC20 {
         transactionMap[msg.sender] = Transaction(
             idProduct,
             msg.sender,
-            products[idProduct].amount,
+            amountToken,
             PENDING_REQ,
             0,
             0,
             true,
             a
         );
-        emit E(products[idProduct].amount);
+        emit E(amountToken);
     }
-
     function acceptTransaction(address clientAddress) public returns(string memory){
         // check if he is admin
         require(adminExists[msg.sender], "You must be admin to accept this Transaction");
@@ -382,7 +389,6 @@ contract Shop is IERC20 {
         return "";
     }
     // -- -- --
-
     function destroy() private{
         selfdestruct(payable(owner));
     }
@@ -392,14 +398,7 @@ contract Shop is IERC20 {
     receive() payable external{
         balances[msg.sender] += msg.value*ethereumExchangeRate;
     }
-
-
     // -- -- --
-
-    //encode the id of the product for the abs
-    function encodeIdProduct(uint id) public pure returns (bytes memory, string memory) {
-        return (abi.encode(id), "Add this hex to the transact Input, is the id of your product");
-    }
     // Move the last element to the deleted spot.
     // Remove the last element.
     function deletePendingTransaction(uint index) internal returns(address[] storage) {
@@ -408,14 +407,6 @@ contract Shop is IERC20 {
         pendingTransaction.pop();
         return pendingTransaction;
     }
-    function test() public returns(uint) {
-        answeredTransactions[0x5B38Da6a701c568545dCfcB03FcB875f56beddC4].push(0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db);
-        answeredTransactions[0x5B38Da6a701c568545dCfcB03FcB875f56beddC4].push(0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB);
-        address[] memory a = answeredTransactions[0x5B38Da6a701c568545dCfcB03FcB875f56beddC4];
-        answeredTransactions[0x5B38Da6a701c568545dCfcB03FcB875f56beddC4] = a;
-        return answeredTransactions[0x5B38Da6a701c568545dCfcB03FcB875f56beddC4].length;
-    }
-
 
     /*
         ERC-20 Token methods
@@ -427,7 +418,6 @@ contract Shop is IERC20 {
     function balanceOf(address tokenOwner) public override view returns (uint256) {
         return balances[tokenOwner];
     }
-
     function transfer(address receiver, uint256 numTokens) public override returns (bool) {
         require(numTokens <= balances[msg.sender]);
         balances[msg.sender] = balances[msg.sender]-numTokens;
@@ -435,17 +425,14 @@ contract Shop is IERC20 {
         emit Transfer(msg.sender, receiver, numTokens);
         return true;
     }
-
     function approve(address spender, uint256 numTokens) public override returns (bool) {
         allowed[msg.sender][spender] = numTokens;
         emit Approval(msg.sender, spender, numTokens);
         return true;
     }
-
     function allowance(address _owner, address spender) public override view returns (uint) {
         return allowed[_owner][spender];
     }
-
     function transferFrom(address _owner, address buyer, uint256 numTokens) public override returns (bool) {
         require(numTokens <= balances[_owner], "The owner does't have enough tokens.");
         require(numTokens <= allowed[_owner][msg.sender], "You are not allowed to transfer that amount.");
@@ -456,11 +443,17 @@ contract Shop is IERC20 {
         emit Transfer(_owner, buyer, numTokens);
         return true;
     }
-
     function changeEthereumExchangeRate(uint256 newExchangeRate) public{
         // check if he is an admin
         require(adminExists[msg.sender], "You must be admin to change the account");
         ethereumExchangeRate = newExchangeRate;
     }
-
+    function yourTokensToEth() public returns(uint){
+        require(balances[msg.sender]>0, "You dont have any tokens");
+        // Transfer the amount to your account
+        uint etherAmount = uint(balances[msg.sender])/uint(ethereumExchangeRate);
+        payable(msg.sender).transfer(etherAmount);
+        delete balances[msg.sender];
+        return etherAmount;
+    }
 }
