@@ -3,7 +3,7 @@ pragma solidity >=0.7.0 <0.9.0;
 import 'https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/IERC20.sol';
 
 contract Shop is IERC20 {
-    event E(uint msg);
+    event E(uint256 msg);
 
     string PENDING_REQ = "Pending";
     string ACCEPT_REQ = "Accept";
@@ -19,6 +19,8 @@ contract Shop is IERC20 {
     Transaction[] public acceptedTransactions;
     Transaction[] public declinedTransactions;
     Transaction[] public clientDeclinedTransactions;
+    WithdrawRequest[] public withdrawAccepted;
+    WithdrawRequest[] public withdrawDeclined;
 
     // ERC-20 Token properties
     string public name = "MyShopToken";
@@ -33,17 +35,21 @@ contract Shop is IERC20 {
     address[] pendingTransaction;
     mapping(address=>address[]) answeredTransactions;
     mapping(address => bool) adminExists;
-    mapping(address => uint) adminIdx;
+    mapping(address => uint256) adminIdx;
     mapping(address => Transaction) transactionMap;
     AdminAccountChange public adminAccountChange;
 
+
+    WithdrawRequest withdrawRequest;
+    uint256 withdrawId = 0;
+
     // structs
     struct Transaction{
-        uint productId;
+        uint256 productId;
         address from;
-        uint amount;
+        uint256 amount;
         string state;
-        uint accepted;
+        uint accept;
         uint rejected;
         bool exists;
         address[] answeredAdmins;
@@ -61,7 +67,16 @@ contract Shop is IERC20 {
         address[] answeredAdmins;
         bool exists;
     }
-
+    struct WithdrawRequest{
+        bool exists;
+        uint256 id;
+        address to;
+        uint accept;
+        uint decline;
+        address[] answeredAdmins;
+        uint256 amount;
+        string state;
+    }
     constructor() {
         // initialize the owner and 3 admins
         owner = msg.sender;
@@ -86,6 +101,71 @@ contract Shop is IERC20 {
         balances[msg.sender] = totalSupply_;
     }
 
+    // Withdraws
+    modifier withdrawCheck(){
+        // check if he is admin
+        require(adminExists[msg.sender], "You must be admin to accept this Withdraw");
+        // check if the withdraw exists
+        require(withdrawRequest.exists, "You dont have any pending withdraw");
+
+        // check if the admin is aswered allready
+        address[] storage answered = withdrawRequest.answeredAdmins;
+        for(uint i=0; i<answered.length;i++){
+            require(answered[i] != msg.sender, "You have aswered allready this Withdraw");
+        }
+        _;
+    }
+    function withdraw(uint256 tokenAmount) public returns (uint256 idWithdrawRequest){
+        require(tokenAmount <= balance, "The contract does not have the number of tokens you want to withdraw.");
+
+        withdrawId += 1;
+        address[] memory emptyAddressArray;
+        withdrawRequest = WithdrawRequest(
+                true,
+                withdrawId,
+                msg.sender,
+                0,
+                0,
+                emptyAddressArray,
+                tokenAmount,
+                PENDING_REQ
+            );
+        return withdrawId;
+    }
+    function acceptWithdraw() public withdrawCheck returns(string memory){
+        // push the adming address
+        withdrawRequest.answeredAdmins.push(msg.sender);
+        withdrawRequest.accept+=1;
+
+        if(withdrawRequest.accept > 1){
+            // make the Withdraw accepted
+            withdrawRequest.state = ACCEPT_REQ;
+            withdrawAccepted.push(withdrawRequest);
+            balances[withdrawRequest.to] += withdrawRequest.amount*ethereumExchangeRate;
+            delete withdrawRequest;
+            return "The Withdraw was accepted";
+        }
+
+        return "The Transaction still Pending";
+    }
+    function declineWithdraw() public withdrawCheck returns(string memory){
+
+        // push the withdraw answer
+        withdrawRequest.answeredAdmins.push(msg.sender);
+        withdrawRequest.decline+=1;
+
+        if(withdrawRequest.decline > 1){
+            // make the Transaction declined
+            withdrawRequest.state = DECLINE_REQ;
+            // add to contract the amount of accepted Transaction
+            balance+=withdrawRequest.amount;
+            withdrawDeclined.push(withdrawRequest);
+            balances[withdrawRequest.to] -= withdrawRequest.amount*ethereumExchangeRate;
+            delete withdrawRequest;
+            return "The Withdraw was declined";
+        }
+        return "The Withdraw still Pending";
+    }
 
     // return all the Pending Transactios
     function showPendingTransactions() public view returns(Transaction[] memory){
@@ -143,9 +223,9 @@ contract Shop is IERC20 {
         // push the
         answered.push(msg.sender);
         transactionMap[clientAddress].answeredAdmins = answered;
-        transactionMap[clientAddress].accepted+=1;
+        transactionMap[clientAddress].accept+=1;
 
-        if(transactionMap[clientAddress].accepted > 1){
+        if(transactionMap[clientAddress].accept > 1){
             // make the Transaction accepted
             transactionMap[clientAddress].state = ACCEPT_REQ;
 
@@ -383,4 +463,4 @@ contract Shop is IERC20 {
         ethereumExchangeRate = newExchangeRate;
     }
 
-} 
+}
